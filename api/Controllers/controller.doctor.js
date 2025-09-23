@@ -57,7 +57,6 @@ exports.addDoctor = (req, res) => {
 // Function for doctor login
 exports.loginDoctor = async (req, res) => {
   try {
-      if (result) {
     // 1) Reject non-strings (blocks objects like {"$ne":null})
     if (typeof req.body.email !== "string" || typeof req.body.password !== "string") {
       return res.status(400).send({ rst: "validation failed" });
