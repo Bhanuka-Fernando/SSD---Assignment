@@ -5,6 +5,7 @@ const nodemailer = require("nodemailer");
 const jwt = require("jsonwebtoken");
 const secretKey = "hey";
 
+
 // Function to add a new doctor
 exports.addDoctor = (req, res) => {
   const transporter = nodemailer.createTransport({
@@ -55,44 +56,61 @@ exports.addDoctor = (req, res) => {
 
 // Function for doctor login
 exports.loginDoctor = async (req, res) => {
-  const { email, password } = req.body;
-
-  const doctor = await Doctor.findOne({ email: email });
-
   try {
-    if (doctor) {
-      const result = password === doctor.password;
-
       if (result) {
-        const token = jwt.sign({ email: doctor.email }, secretKey, {
-          expiresIn: "1h",
-        });
-        res.status(200).send({ rst: "success", data: doctor, tok: token });
-      } else {
-        res.status(200).send({ rst: "incorrect password" });
-      }
-    } else {
-      res.status(200).send({ rst: "invalid doctor" });
+    // 1) Reject non-strings (blocks objects like {"$ne":null})
+    if (typeof req.body.email !== "string" || typeof req.body.password !== "string") {
+      return res.status(400).send({ rst: "validation failed" });
     }
-  } catch (error) {
-    res.status(500).send({ error });
+
+    // 2) Force primitive strings
+    const email = String(req.body.email);
+    const pass  = String(req.body.password);
+
+    // 3) Use exact match ($eq) so operators from user input are NOT executed
+    const doctor = await Doctor.findOne({ email: { $eq: email } }).lean();
+
+    if (!doctor) return res.status(200).send({ rst: "invalid doctor" });
+
+    // keep your current compare (you said you only want NoSQLi fix)
+    const result = pass === doctor.password;
+    if (!result) return res.status(200).send({ rst: "incorrect password" });
+
+    const token = jwt.sign({ email: doctor.email }, "hey", { expiresIn: "1h" });
+    res.status(200).send({ rst: "success", data: doctor, tok: token });
+  } catch (e) {
+    res.status(500).send({ rst: "error" });
   }
 };
 
+
 // Function to check doctor authorization
 exports.checkDoctor = async (req, res) => {
-  const token = req.headers.authorization;
-  let email = null;
-  jwt.verify(token, secretKey, (error, decoded) => {
-    if (error) {
-      console.log(error);
-    } else {
-      email = decoded.email;
+  try {
+    const token = req.headers.authorization;
+    if (!token) return res.status(401).send({ rst: "no token" });
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, "hey");
+    } catch (e) {
+      return res.status(401).send({ rst: "invalid token" });
     }
-  });
-  const doctor = await Doctor.findOne({ email });
-  res.status(200).send({ rst: "checked", doctor });
+
+    // Ensure decoded.email is a plain string (not an object)
+    const email = typeof decoded.email === "string" ? decoded.email : "";
+    if (!email) return res.status(400).send({ rst: "validation failed" });
+
+    // Exact match prevents operator injection from token payload
+    const doctor = await Doctor.findOne({ email: { $eq: email } }).lean();
+    if (!doctor) return res.status(404).send({ rst: "not found" });
+
+    res.status(200).send({ rst: "checked", doctor });
+  } catch (e) {
+    res.status(500).send({ rst: "error" });
+  }
 };
+
 
 // Function to fetch all doctors
 exports.getAllDoctors = (req, res) => {
