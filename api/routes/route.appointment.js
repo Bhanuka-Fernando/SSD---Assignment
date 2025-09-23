@@ -1,5 +1,6 @@
 // api/Routes/route.appointment.js
 const router = require("express").Router();
+const { Types } = require("mongoose");
 const {
   getChannelAppointments,
   getPatientAppointments,
@@ -10,25 +11,62 @@ const {
   markConsulted,
 } = require("../Controllers/controller.appointment");
 
-// Route to get appointments by channel
-router.get("/channelAppointments/:id", getChannelAppointments);
 
-// Route to get appointments by patient
-router.get("/patientAppointments/:id", getPatientAppointments);
+const { auth, requireRole } = require("../middleware/auth"); // see note below
 
-// Route to create a new appointment
-router.post("/makeapt", createAppointment);
+// Validate :id is a proper ObjectId
+const validateId = (param = "id") => (req, res, next) => {
+  if (!Types.ObjectId.isValid(req.params[param])) {
+    return res.status(400).json({ msg: "invalid id" });
+  }
+  next();
+};
 
-// Route to delete an appointment by ID
-router.delete("/delete/:id", deleteAppointment);
+// Patients can only read their own appointments
+const patientCanOnlyAccessOwn = (req, res, next) => {
+  if (req.user?.role === "patient" && req.user?.sub !== req.params.id) {
+    return res.status(403).json({ msg: "forbidden" });
+  }
+  next();
+};
 
-// Route to fetch a specific appointment by ID
-router.get("/get/:id", getAppointmentById);
+// ---- Routes ----
 
-// Route to update an appointment's notes
-router.put("/update/:id", updateAppointment);
+// Get appointments by channel (doctor/admin only)
+router.get(
+  "/channelAppointments/:id",
+  auth,
+  requireRole("doctor", "admin"),
+  validateId(),
+  getChannelAppointments
+);
 
-// Route to mark an appointment as consulted
-router.put("/markConsulted/:id", markConsulted);
+// Get appointments by patient
+// - doctor/admin can view any
+// - patient can only view their own (id === JWT sub)
+router.get("/patientAppointments/:id",auth,patientCanOnlyAccessOwn,validateId(),getPatientAppointments
+);
+
+// Create a new appointment (patient/doctor/admin)
+router.post("/makeapt", auth, requireRole("patient", "doctor", "admin"), createAppointment);
+
+// Delete appointment by ID (doctor/admin)
+router.delete("/delete/:id", auth, requireRole("doctor", "admin"), validateId(), deleteAppointment);
+
+// Fetch specific appointment by ID (doctor/admin)
+// (If you want patients to fetch by appointment ID, add ownership checks that the appointment.patient === req.user.sub)
+router.get("/get/:id", auth, requireRole("doctor", "admin"), validateId(), getAppointmentById);
+
+// Update appointment notes (doctor/admin)
+router.put("/update/:id", auth, requireRole("doctor", "admin"), validateId(), updateAppointment);
+
+// Mark appointment as consulted (doctor/admin)
+router.put(
+  "/markConsulted/:id",
+  auth,
+  requireRole("doctor", "admin"),
+  validateId(),
+  markConsulted
+);
 
 module.exports = router;
