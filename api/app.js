@@ -1,5 +1,6 @@
 const express = require("express");
 const dotenv = require("dotenv");
+const mongoose = require('mongoose')
 const cors = require("cors");
 const { connectToDatabase } = require("./Configurations/DB_Connection.js"); // Import the Singleton connection function
 
@@ -18,6 +19,8 @@ app.use('/uploads', express.static('uploads')); // Prescription upload in insura
 connectToDatabase() // Use the Singleton function to connect to the database
   .then(() => console.log("Database connection successful"))
   .catch((err) => console.error("Database connection error:", err));
+
+mongoose.set("debug", true);
 
 // Routes
 const patientRouter = require("./routes/route.patient.js");
