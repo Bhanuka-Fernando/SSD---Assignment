@@ -1,21 +1,27 @@
 const express = require("express");
 const dotenv = require("dotenv");
-const cors = require("cors");
-const { connectToDatabase } = require("./Configurations/DB_Connection.js"); // Import the Singleton connection function
+dotenv.config(); // load env first
 
-dotenv.config();
+const cors = require("cors");
+const mongoSanitize = require("express-mongo-sanitize");
+const { connectToDatabase } = require("./Configurations/DB_Connection.js");
+
+const mongoose = require("mongoose");
+mongoose.set("sanitizeFilter", true);
+const { isValidObjectId } = mongoose; // (if you need it later)
 
 // Initialize express
 const app = express();
 
-// Middleware
+// Middleware (order matters, and must be AFTER app is created)
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
-app.use('/uploads', express.static('uploads')); // Prescription upload in insurance claim
+app.use(mongoSanitize({ allowDots: false, replaceWith: "_" })); // moved here
+app.use("/uploads", express.static("uploads")); // Prescription upload in insurance claim
 
 // Database connection
-connectToDatabase() // Use the Singleton function to connect to the database
+connectToDatabase()
   .then(() => console.log("Database connection successful"))
   .catch((err) => console.error("Database connection error:", err));
 
@@ -44,22 +50,22 @@ app.use("/report", reportRouter);
 const testRoutes = require("./routes/route.tests.js");
 app.use("/test", testRoutes);
 
-const recordtRouter = require("./routes/records");
-app.use("/record", recordtRouter);
+const recordRouter = require("./routes/records"); // optional: rename from recordtRouter
+app.use("/record", recordRouter);
 
 const inventoryRoutes = require("./routes/route.inventory.js");
-app.use("/Inventory", inventoryRoutes);
+app.use("/Inventory", inventoryRoutes); // consider "/inventory"
 
 const orderRoutes = require("./routes/order.js");
-app.use("/Order", orderRoutes);
+app.use("/Order", orderRoutes); // consider "/order"
 
-const pharmcyRoutes = require("./routes/pharmacyin");
-app.use("/PharmacyIn", pharmcyRoutes);
+const pharmacyRoutes = require("./routes/pharmacyin"); // optional: rename from pharmcyRoutes
+app.use("/PharmacyIn", pharmacyRoutes); // consider "/pharmacy-in"
 
-const cardRoutes = require('./routes/CardRoutes.js');
+const cardRoutes = require("./routes/CardRoutes.js");
 app.use("/card", cardRoutes);
 
-const insuranceRoutes = require('./routes/insuranceRoutes');
+const insuranceRoutes = require("./routes/insuranceRoutes");
 app.use("/insurance", insuranceRoutes);
 
 // Export the app

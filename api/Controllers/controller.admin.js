@@ -3,6 +3,8 @@ const Admin = require("../models/Admin");
 const nodemailer = require("nodemailer");
 const jwt = require("jsonwebtoken");
 const secretKey = 'hey';
+const bcrypt = require("bcrypt");
+
 
 // Nodemailer transporter setup
 const transporter = nodemailer.createTransport({
@@ -65,25 +67,44 @@ exports.deleteAdmin = async (req, res) => {
 
 // Login
 exports.loginAdmin = async (req, res) => {
-  const { email, password } = req.body;
-
-  const admin = await Admin.findOne({ email: email });
-
   try {
-    if (admin) {
-      const result = password === admin.password;
+    const rawEmail = req.body?.email;
+    const rawPassword = req.body?.password;
 
-      if (result) {
-        const token = jwt.sign({ email: admin.email }, secretKey, { expiresIn: '1h' });
-        res.status(200).send({ rst: "success", data: admin, tok: token });
-      } else {
-        res.status(200).send({ rst: "incorrect password" });
-      }
-    } else {
-      res.status(200).send({ rst: "invalid admin" });
+    // 1) Type enforcement blocks operator injection
+    if (typeof rawEmail !== "string" || typeof rawPassword !== "string") {
+      return res.status(400).json({ error: "Invalid input types" });
     }
+
+    const email = rawEmail.trim();
+    const password = rawPassword; // keep as-is for bcrypt compare
+
+    if (!email || email.length > 254 || password.length > 256) {
+      return res.status(400).json({ error: "Invalid email or password" });
+    }
+
+    const admin = await Admin.findOne({ email }).select("+password");
+    if (!admin) {
+      return res.status(401).json({ rst: "invalid admin" });
+    }
+
+    // Use bcrypt (store hashed passwords in DB)
+    const ok = await bcrypt.compare(password, admin.password);
+    if (!ok) {
+      return res.status(401).json({ rst: "incorrect password" });
+    }
+
+    const token = jwt.sign(
+      { sub: admin._id.toString(), email: admin.email },
+      process.env.JWT_SECRET,             // do NOT hardcode secrets
+      { expiresIn: "1h" }
+    );
+
+    // never return the password
+    const { password: _omit, ...safe } = admin.toObject();
+    return res.status(200).json({ rst: "success", data: safe, tok: token });
   } catch (error) {
-    res.status(500).send({ error });
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
@@ -133,23 +154,36 @@ exports.getAdminById = async (req, res) => {
 };
 
 // Search admins
+
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 exports.searchAdmins = async (req, res) => {
   try {
-    const query = req.query.query;
+    const raw = req.query?.query;
+    if (typeof raw !== "string") return res.status(400).json({ error: "Invalid query" });
+
+    const q = raw.trim();
+    if (!q) return res.json([]);                  // empty search returns empty set
+    if (q.length > 64) return res.status(400).json({ error: "Query too long" });
+
+    const rx = new RegExp(escapeRegex(q), "i");   // safe regex
+
     const results = await Admin.find({
       $or: [
-        { email: { $regex: query, $options: "i" } },
-        { name: { $regex: query, $options: "i" } },
-        { roleName: { $regex: query, $options: "i" } },
-        { allocatedWork: { $regex: query, $options: "i" } },
+        { email: rx },
+        { name: rx },
+        { roleName: rx },
+        { allocatedWork: rx },
       ],
-    });
+    }).limit(50);
+
     res.json(results);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Server error" });
   }
 };
+
 
 // Update admin
 exports.updateAdmin = async (req, res) => {
