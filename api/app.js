@@ -15,9 +15,7 @@ app.use(express.urlencoded({ limit: "10mb", extended: true }));
 app.use('/uploads', express.static('uploads')); // Prescription upload in insurance claim
 
 // Database connection
-connectToDatabase() // Use the Singleton function to connect to the database
-  .then(() => console.log("Database connection successful"))
-  .catch((err) => console.error("Database connection error:", err));
+connectToDatabase() 
 
 // Routes
 const patientRouter = require("./routes/route.patient.js");
