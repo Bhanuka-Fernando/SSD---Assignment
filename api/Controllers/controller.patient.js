@@ -1,154 +1,192 @@
+// controllers/controller.patient.js
 const Patient = require("../models/Patient");
-const nodemailer = require("nodemailer");
 const jwt = require("jsonwebtoken");
-const secretKey = "hey";
+const bcrypt = require("bcrypt");
+const { pick } = require("../utils/pick");
+const { ALLOW_CREATE, ALLOW_UPDATE } = require("../constants/patientFields");
 
-// Controller to add a new patient
-exports.addPatient = (req, res) => {
-  const {
-    email,
-    password,
-    firstName,
-    lastName,
-    gender,
-    dob,
-    civilStatus,
-    phone,
-    emergencyPhone,
-    gaurdianNIC,
-    gaurdianName,
-    gaurdianPhone,
-    height,
-    weight,
-    bloodGroup,
-    allergies,
-    medicalStatus,
-    insuranceNo,
-    insuranceCompany,
-  } = req.body;
+const JWT_SECRET = process.env.JWT_SECRET || "dev_only_secret";
 
-  const newPatient = new Patient({
-    email,
-    firstName,
-    lastName,
-    dob,
-    gender,
-    password,
-    civilStatus,
-    phoneNo: phone,
-    emergencyPhone,
-    gaurdianName,
-    gaurdianNIC,
-    gaurdianPhone,
-    height,
-    weight,
-    bloodGroup,
-    allergies,
-    medicalStatus,
-    insuranceCompany,
-    insuranceNo,
-  });
-
-  newPatient
-    .save()
-    .then(() => res.json("Patient Added"))
-    .catch((err) => console.log(err));
-};
-
-// Controller for login
-exports.loginPatient = async (req, res) => {
-  const { email, password } = req.body;
-  const patient = await Patient.findOne({ email });
-
+// CREATE (signup)
+exports.addPatient = async (req, res) => {
   try {
-    if (patient) {
-      const result = password === patient.password;
+    const data = pick(req.body, ALLOW_CREATE);
 
-      if (result) {
-        const token = jwt.sign({ email: patient.email }, secretKey, {
-          expiresIn: "1h",
-        });
-        res.status(200).send({ rst: "success", data: patient, tok: token });
-      } else {
-        res.status(200).send({ rst: "incorrect password" });
-      }
-    } else {
-      res.status(200).send({ rst: "invalid user" });
+    if (typeof data.email !== "string" || typeof data.password !== "string") {
+      return res.status(400).json({ error: "Invalid email/password" });
     }
-  } catch (error) {
-    res.status(500).send({ error });
+
+    // Do NOT hash here (model pre-save hook will hash)
+    const newPatient = new Patient(data);
+    await newPatient.save();
+
+    return res.json("Patient Added");
+  } catch (err) {
+    console.error(err);
+    if (err.name === "ValidationError") {
+      return res.status(400).json({ error: "Validation failed", details: err.errors });
+    }
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
-// Controller to verify JWT token
-exports.checkToken = async (req, res) => {
-  const token = req.headers.authorization;
-  let email = null;
-
-  jwt.verify(token, secretKey, (error, decoded) => {
-    if (error) {
-      console.log(error);
-      return res.status(401).send("Unauthorized");
+// LOGIN
+exports.loginPatient = async (req, res) => {
+  try {
+    let { email, password } = req.body || {};
+    if (typeof email !== "string" || typeof password !== "string") {
+      return res.status(400).json({ error: "Invalid credentials" });
     }
-    email = decoded.email;
-  });
 
-  const patient = await Patient.findOne({ email });
-  res.status(200).send({ rst: "checked", patient });
+    email = email.trim().toLowerCase();
+
+    const patient = await Patient.findOne({ email }).select("+password");
+    if (!patient) {
+      return res.status(401).json({ rst: "invalid user" });
+    }
+
+    const stored = patient.password || "";
+    const looksHashed =
+      stored.startsWith("$2a$") || stored.startsWith("$2b$") || stored.startsWith("$2y$");
+
+    let ok = false;
+
+    if (looksHashed) {
+      // normal path
+      ok = await bcrypt.compare(password, stored);
+    } else {
+      // legacy plaintext password path
+      if (password === stored) {
+        ok = true;
+        try {
+          const newHash = await bcrypt.hash(password, 12);
+          // atomic update: avoids full model validation (e.g., missing `phone`)
+          await Patient.updateOne(
+            { _id: patient._id },
+            { $set: { password: newHash } }
+          );
+        } catch (e) {
+          console.error("[login] migrate-hash failed:", e);
+        }
+      }
+    }
+
+    if (!ok) {
+      return res.status(401).json({ rst: "incorrect password" });
+    }
+
+    const token = jwt.sign(
+      { sub: patient._id.toString(), email: patient.email },
+      JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    const { password: _omit, __v, ...safe } = patient.toObject();
+    return res.status(200).json({ rst: "success", data: safe, tok: token });
+  } catch (error) {
+    console.error("[login] Unexpected error:", error);
+    return res.status(500).json({ error: "Server error" });
+  }
 };
 
-// Controller to get patient by ID
+
+// VERIFY TOKEN
+exports.checkToken = async (req, res) => {
+  const token = req.headers.authorization;
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const patient = await Patient.findOne({ email: decoded.email });
+    return res.status(200).send({ rst: "checked", patient });
+  } catch (e) {
+    console.error(e);
+    return res.status(401).send("Unauthorized");
+  }
+};
+
+// GET BY ID
 exports.getPatientById = async (req, res) => {
   const pid = req.params.id;
-
   try {
     const patient = await Patient.findById(pid);
-    res.status(200).send({ status: "Patient fetched", patient });
+    return res.status(200).send({ status: "Patient fetched", patient });
   } catch (err) {
-    res.status(500).send({
+    return res.status(500).send({
       status: "Error in getting patient details",
       error: err.message,
     });
   }
 };
 
-// Controller to update a patient by ID
+// UPDATE (mass-assignment safe)
 exports.updatePatient = async (req, res) => {
-  const pid = req.params.id;
-  const updatePatient = req.body;
-
   try {
-    await Patient.findByIdAndUpdate(pid, updatePatient);
-    res.status(200).send({ status: "Patient updated" });
+    const pid = req.params.id;
+    const safe = pick(req.body, ALLOW_UPDATE);
+
+    if (Object.keys(safe).length === 0) {
+      return res.status(400).json({ error: "No allowed fields to update" });
+    }
+
+    await Patient.findByIdAndUpdate(
+      pid,
+      { $set: safe },
+      { new: true, runValidators: true, omitUndefined: true }
+    );
+
+    return res.status(200).json({ status: "Patient updated" });
   } catch (err) {
-    res.status(500).send({
-      status: "Error with updating information",
-      error: err.message,
-    });
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
-// Controller to delete a patient by ID
+// DELETE
 exports.deletePatient = async (req, res) => {
   const pid = req.params.id;
-
   try {
     await Patient.findByIdAndDelete(pid);
-    res.status(200).send({ status: "Patient deleted" });
+    return res.status(200).send({ status: "Patient deleted" });
   } catch (err) {
-    res.status(202).send({
+    return res.status(202).send({
       status: "Error with deleting the Patient",
       error: err.message,
     });
   }
 };
 
-// Controller to get all patients
+// LIST ALL
 exports.getAllPatients = async (req, res) => {
   try {
     const patients = await Patient.find();
-    res.json(patients);
+    return res.json(patients);
   } catch (err) {
-    console.log(err);
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
+};
+
+// CHANGE PASSWORD (separate endpoint)
+exports.changePassword = async (req, res) => {
+  try {
+    const pid = req.params.id;
+    const { currentPassword, newPassword } = req.body;
+
+    if (typeof currentPassword !== "string" || typeof newPassword !== "string") {
+      return res.status(400).json({ error: "Invalid input" });
+    }
+
+    const patient = await Patient.findById(pid).select("+password");
+    if (!patient) return res.status(404).json({ error: "Not found" });
+
+    const ok = await bcrypt.compare(currentPassword, patient.password);
+    if (!ok) return res.status(401).json({ error: "Current password incorrect" });
+
+    const hash = await bcrypt.hash(newPassword, 12);
+    await Patient.findByIdAndUpdate(pid, { $set: { password: hash } });
+
+    return res.json({ status: "Password changed" });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: "Server error" });
   }
 };

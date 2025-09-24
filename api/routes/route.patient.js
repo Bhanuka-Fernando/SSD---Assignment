@@ -1,34 +1,29 @@
-const express = require("express");
-const router = express.Router();
-const {
-  addPatient,
-  loginPatient,
-  checkToken,
-  getPatientById,
-  updatePatient,
-  deletePatient,
-  getAllPatients,
-} = require("../Controllers/controller.patient");
+// routes/route.patient.js
+const router = require("express").Router();
+const ctrl = require("../controllers/controller.patient");
 
-// Route to add a new patient
-router.post("/add", addPatient);
+// create
+router.post("/add", ctrl.addPatient);
 
-// Route to login a patient
-router.post("/login", loginPatient);
+// login
+router.post("/login", ctrl.loginPatient);
 
-// Route to verify token
-router.get("/check", checkToken);
+// verify token
+router.get("/check", ctrl.checkToken);
 
-// Route to get patient by ID
-router.get("/get/:id", getPatientById);
+// view
+router.get("/get/:id", ctrl.getPatientById);
 
-// Route to update a patient by ID
-router.put("/update/:id", updatePatient);
+// update (mass-assignment safe)
+router.put("/update/:id", ctrl.updatePatient);
 
-// Route to delete a patient by ID
-router.delete("/delete/:id", deletePatient);
+// change password (separate)
+router.put("/change-password/:id", ctrl.changePassword);
 
-// Route to get all patients
-router.get("/", getAllPatients);
+// delete
+router.delete("/delete/:id", ctrl.deletePatient);
+
+// list
+router.get("/", ctrl.getAllPatients);
 
 module.exports = router;
