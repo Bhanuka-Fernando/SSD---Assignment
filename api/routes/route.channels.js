@@ -90,7 +90,7 @@ router.route("/doctorchannels/:id").get(async (req, res) => {
   const chn = await Channel.find({ doctor: did })
     .sort({ startDateTime: 1 })
     .then((channels) => {
-      console.log("Aaaaaaaaaaaa");
+      // console.log("Aaaaaaaaaaaa");
       res.status(200).json(channels);
     })
     .catch((err) => {
