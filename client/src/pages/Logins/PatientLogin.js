@@ -1,40 +1,44 @@
 import React, { useEffect, useState } from 'react';
-import axios from "axios";
+import { useNavigate } from 'react-router-dom';   // <-- add
+import api from '../../api';                         // <-- use the api client
 
 const PatientLogin = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const navigate = useNavigate();                // <-- add
 
   useEffect(() => {
     const token = localStorage.getItem("token");
     const type = localStorage.getItem("type");
-
-    if (token != null && type === "patient") {
-      window.location.href = "/patientHome";
+    if (token && type === "patient") {
+      api.defaults.headers.common.Authorization = `Bearer ${token}`; // prime
+      navigate("/patientHome", { replace: true });                   // use navigate
     }
-  }, []);
+  }, [navigate]);
 
-  function login(e) {
+  async function login(e) {
     e.preventDefault();
+    try {
+      const { data } = await api.post("/patient/login", { email, password });
+      if (data.rst === "success") {
+        localStorage.setItem("type", "patient");
+        localStorage.setItem("token", data.tok);
 
-    const patient = { email, password };
+        // make sure subsequent calls include the token immediately
+        api.defaults.headers.common.Authorization = `Bearer ${data.tok}`;
 
-    axios.post("http://localhost:8070/patient/login", patient)
-      .then((res) => {
-        if (res.data.rst === "success") {
-          localStorage.setItem("type", "patient");
-          localStorage.setItem("token", res.data.tok);
-          alert("Login successful");
-          window.location = '/patientHome';
-        } else if (res.data.rst === "incorrect password") {
-          alert("Incorrect password");
-        } else if (res.data.rst === "invalid user") {
-          alert("Invalid user");
-        }
-      })
-      .catch((err) => {
-        alert("An error occurred during login");
-      });
+        alert("Login successful");
+        navigate("/patientHome", { replace: true }); // <-- not window.location
+      } else if (data.rst === "incorrect password") {
+        alert("Incorrect password");
+      } else if (data.rst === "invalid user") {
+        alert("Invalid user");
+      } else {
+        alert("Login failed");
+      }
+    } catch (err) {
+      alert("An error occurred during login");
+    }
   }
 
   return (

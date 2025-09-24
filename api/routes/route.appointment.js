@@ -10,25 +10,22 @@ const {
   markConsulted,
 } = require("../Controllers/controller.appointment");
 
-// Route to get appointments by channel
-router.get("/channelAppointments/:id", getChannelAppointments);
+const { requireAuth } = require("../middleware/auth");
+const { canReadAppointment, canModifyAppointment } = require("../middleware/authorize");
 
-// Route to get appointments by patient
-router.get("/patientAppointments/:id", getPatientAppointments);
+// Channel appointments – typically doctor/admin; if you have roles add a role guard here too
+router.get("/channelAppointments/:id", requireAuth, getChannelAppointments);
 
-// Route to create a new appointment
-router.post("/makeapt", createAppointment);
+// Patient appointments – for logged-in patient (controller ignores supplied id for patients)
+router.get("/patientAppointments/:id?", requireAuth, getPatientAppointments);
 
-// Route to delete an appointment by ID
-router.delete("/delete/:id", deleteAppointment);
+// Create – must be logged in
+router.post("/makeapt", requireAuth, createAppointment);
 
-// Route to fetch a specific appointment by ID
-router.get("/get/:id", getAppointmentById);
-
-// Route to update an appointment's notes
-router.put("/update/:id", updateAppointment);
-
-// Route to mark an appointment as consulted
-router.put("/markConsulted/:id", markConsulted);
+// Protected object routes (ownership enforced in middleware)
+router.get("/get/:id", requireAuth, canReadAppointment(), getAppointmentById);
+router.put("/update/:id", requireAuth, canModifyAppointment(), updateAppointment);
+router.put("/markConsulted/:id", requireAuth, canModifyAppointment(), markConsulted);
+router.delete("/delete/:id", requireAuth, canModifyAppointment(), deleteAppointment);
 
 module.exports = router;

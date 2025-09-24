@@ -1,92 +1,102 @@
-import React, { useEffect, useState } from 'react';
-import axios from "axios";
+// pages/Patient/PatientHome.jsx
+import React, { useEffect, useState } from "react";
+import { useNavigate, Link } from "react-router-dom";
 import PatientHeader from "../../components/Payment/Patientheader";
 import PatientSideBar from "../../components/PatientSideBar";
-import AllChannels from '../../components/Appointment/AllChannels';
-
+import AllChannels from "../../components/Appointment/AllChannels";
+import api from "../../api";
 
 const PatientHome = () => {
-    const dt = new Date().toISOString().split("T")[0]; 
+  const dt = new Date().toISOString().split("T")[0];
+  const navigate = useNavigate();
 
-    const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
-    const [channels, setChannels] = useState([]);
-    const [doctor, setDoctor] = useState("");
-    const [date, setDate] = useState(new Date());
+  const [email, setEmail] = useState("");
+  const [channels, setChannels] = useState([]);
+  const [doctor, setDoctor] = useState("");
+  const [date, setDate] = useState("");
 
-    useEffect(() => {
-        const token = localStorage.getItem("token");
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    const type = localStorage.getItem("type");
 
-        if (token == null) {
-            window.location.href = "/";
-        } else {
-            getUser();
-            getChannels();
-        }
-    }, []);
+    // hard guard
+    if (!token || type !== "patient") {
+      navigate("/patientLogin", { replace: true });
+      return;
+    }
+    // prime axios for this tab / hard refresh
+    api.defaults.headers.common.Authorization = `Bearer ${token}`;
 
-    const getChannels = async () => {
-        try {
-            const res = await axios.get(`http://localhost:8070/channel/`);
-            setChannels(res.data);
-        } catch (error) {
-            console.log(error);
-        }
-    };
+    getUser();
+    getChannels();
+  }, [navigate]);
 
-    const getUser = async () => {
-        try {
-            const res = await axios.get("http://localhost:8070/patient/check/", {
-                headers: { Authorization: `${localStorage.getItem("token")}` }
-            });
-            setEmail(res.data.patient.email);
-            setPassword(res.data.patient.password);
-        } catch (err) {
-            localStorage.removeItem("token");
-            window.location.href = "/";
-        }
-    };
+  const getChannels = async () => {
+    try {
+      const res = await api.get("/channel"); // baseURL already set
+      setChannels(res.data);
+    } catch (error) {
+      console.log(error);
+    }
+  };
 
-    const logout = () => {
-        localStorage.removeItem("token");
-        alert("You have logged out");
-        window.location.href = "/";
-    };
+  const getUser = async () => {
+    try {
+      const res = await api.get("/patient/check"); // token added by api interceptor/defaults
+      setEmail(res.data.patient.email || "");
+    } catch (err) {
+      // token invalid -> logout and go to login
+      localStorage.removeItem("token");
+      localStorage.removeItem("type");
+      navigate("/patientLogin", { replace: true });
+    }
+  };
 
-    return (
-        <div className="flex flex-col h-screen">
-            <PatientHeader />
+  const logout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("type");
+    alert("You have logged out");
+    navigate("/", { replace: true });
+  };
 
-            <div className="flex flex-grow">
-                <PatientSideBar />
+  const dateParam = date ? encodeURIComponent(date) : "";
+  const doctorParam = doctor ? encodeURIComponent(doctor) : "";
 
-                <div className="flex-grow p-8 bg-gray-100 ml-64 mt-8"> {/* Adjust padding and margin-left here */}
-                    <div className='search-container mb-4 mt-10'> {/* Added mt-4 */}
-                        <input 
-                            className='search-inputs border border-gray-300 rounded p-2 w-full md:w-1/3' 
-                            type="text" 
-                            placeholder="Search Doctor" 
-                            onChange={(e) => setDoctor(e.target.value)} 
-                            required 
-                        />
-                        <input 
-                            className='search-inputs border border-gray-300 rounded p-2 w-full md:w-1/3 ml-2' 
-                            type="date"  
-                            placeholder="Channeling Date" 
-                            min={dt} 
-                            onChange={(e) => setDate(new Date(e.target.value))} 
-                            required 
-                        />
-                        <a href={`/searchChannels/${date}/${doctor}`}>
-                            <button className='search-btn bg-blue-500 text-white rounded p-2 ml-2'>Search</button>
-                        </a>
-                    </div>
+  return (
+    <div className="flex flex-col h-screen">
+      <PatientHeader onLogout={logout} />
 
-                    <AllChannels channels={channels} />
-                </div>
-            </div>
+      <div className="flex flex-grow">
+        <PatientSideBar />
+
+        <div className="flex-grow p-8 bg-gray-100 ml-64 mt-8">
+          <div className="search-container mb-4 mt-10">
+            <input
+              className="search-inputs border border-gray-300 rounded p-2 w-full md:w-1/3"
+              type="text"
+              placeholder="Search Doctor"
+              value={doctor}
+              onChange={(e) => setDoctor(e.target.value)}
+            />
+            <input
+              className="search-inputs border border-gray-300 rounded p-2 w-full md:w-1/3 ml-2"
+              type="date"
+              min={dt}
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
+            <Link to={`/searchChannels/${dateParam}/${doctorParam}`}>
+              <button className="search-btn bg-blue-500 text-white rounded p-2 ml-2">
+                Search
+              </button>
+            </Link>
+          </div>
+
+          <AllChannels channels={channels} />
         </div>
-    );
+      </div>
+    </div>
+  );
 };
 
 export default PatientHome;

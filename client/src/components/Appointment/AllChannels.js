@@ -1,6 +1,6 @@
 
 import SingleChannel from "./SingleChannel";
-import axios from "axios";
+import api from "../../api";
 import React, { useState } from 'react'; // Import useState
 
 
