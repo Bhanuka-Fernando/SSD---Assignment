@@ -1,207 +1,254 @@
-// adminController.js
+// Controllers/controller.admin.js
+
 const Admin = require("../models/Admin");
 const nodemailer = require("nodemailer");
 const jwt = require("jsonwebtoken");
-const secretKey = 'hey';
+const crypto = require("crypto");
 
-// Nodemailer transporter setup
+/* --------------------------- JWT configuration --------------------------- */
+// NEVER hardcode secrets
+const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_ISSUER = "helasuwa";
+const JWT_EXPIRES = "1h";
+
+/* ---------------------------- Mailer (Zoho) ------------------------------ */
 const transporter = nodemailer.createTransport({
-  host: "smtp.zoho.com",
-  port: 465,
+  host: process.env.SMTP_HOST || "smtp.zoho.com",
+  port: Number(process.env.SMTP_PORT || 465),
   secure: true,
   auth: {
-    user: "helasuwa@zohomail.com",
-    pass: process.env.EmailPass,
+    user: process.env.SMTP_USER, // e.g., helasuwa@zohomail.com
+    pass: process.env.EmailPass, // Zoho app-specific password
   },
 });
 
-// Add new admin
-exports.addAdmin = (req, res) => {
-  const { email, name, phone, roleName, allocatedWork, password } = req.body;
-
-  const newAdmin = new Admin({
-    email,
-    name,
-    password,
-    phone,
-    roleName,
-    allocatedWork,
+/* --------------------------------- Utils -------------------------------- */
+const signToken = (payload, expiresIn = JWT_EXPIRES) =>
+  jwt.sign(payload, JWT_SECRET, {
+    algorithm: "HS256",
+    issuer: JWT_ISSUER,
+    expiresIn,
+    jwtid: crypto.randomUUID(),
   });
 
-  newAdmin.save().then(() => {
-    const mailOptions = {
-      from: "helasuwa@zohomail.com",
-      to: email,
-      subject: "Staff Profile Created",
-      text: `Hello \nYour Staff Account has been created.\n\nEmail : ${email} \nPassword : ${password}\n\nThank You.`,
-    };
+const hashEmail = (e) =>
+  e ? crypto.createHash("sha256").update(String(e).toLowerCase().trim()).digest("hex") : null;
 
-    transporter.sendMail(mailOptions, (error, info) => {
-      if (error) {
-        console.log(error);
-      } else {
-        console.log("Email sent: " + info.response);
-      }
-    });
-    res.json("Admin Added");
-  }).catch(err => {
-    console.log(err);
-  });
-};
+/* =============================== Controllers ============================ */
 
-// Delete admin
-exports.deleteAdmin = async (req, res) => {
-  let aid = req.params.id;
-
-  await Admin.findByIdAndDelete(aid)
-    .then(() => {
-      res.status(200).send({ status: "Staff deleted" });
-    })
-    .catch((err) => {
-      console.log(err);
-      res.status(202).send({ status: "Error with deleting the admin", error: err.message });
-    });
-};
-
-// Login
-exports.loginAdmin = async (req, res) => {
-  const { email, password } = req.body;
-
-  const admin = await Admin.findOne({ email: email });
-
+/**
+ * Add new admin
+ * NOTE: Password is hashed by Admin model hooks. Do NOT email plaintext passwords.
+ */
+exports.addAdmin = async (req, res) => {
   try {
-    if (admin) {
-      const result = password === admin.password;
+    const { email, name, phone, roleName, allocatedWork, password } = req.body;
 
-      if (result) {
-        const token = jwt.sign({ email: admin.email }, secretKey, { expiresIn: '1h' });
-        res.status(200).send({ rst: "success", data: admin, tok: token });
-      } else {
-        res.status(200).send({ rst: "incorrect password" });
-      }
-    } else {
-      res.status(200).send({ rst: "invalid admin" });
+    if (!email || !name || !phone || !roleName || !allocatedWork || !password) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
-  } catch (error) {
-    res.status(500).send({ error });
+
+    const admin = await Admin.create({ email, name, phone, roleName, allocatedWork, password });
+
+    // Notify (no secrets)
+    try {
+      await transporter.sendMail({
+        from: process.env.SMTP_USER,
+        to: email,
+        subject: "Your staff profile is ready",
+        text: `Hi ${name}, your staff account has been created. Please log in and change your password immediately.`,
+      });
+    } catch (e) {
+      req.log?.warn("mail.send.failed", { reqId: req.id, msg: e.message });
+    }
+
+    req.log?.info("admin.created", {
+      reqId: req.id,
+      actor: req.user?.id || "system",
+      target: admin._id.toString(),
+    });
+
+    return res.status(201).json({ message: "Admin Added", admin });
+  } catch (err) {
+    req.log?.error("admin.create.error", { reqId: req.id, msg: err.message });
+    if (err.code === 11000) return res.status(409).json({ error: "Email already exists" });
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
-// Check token
-exports.checkToken = async (req, res) => {
-  const token = req.headers.authorization;
-  let email = null;
-
-  jwt.verify(token, secretKey, (error, decoded) => {
-    if (error) {
-      console.log(error);
-    } else {
-      email = decoded.email;
-    }
-  });
-
-  const admin = await Admin.findOne({ email: email });
-  res.status(200).send({ rst: "checked", admin: admin });
+/**
+ * Delete admin
+ */
+exports.deleteAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Admin.findByIdAndDelete(id);
+    req.log?.info("admin.deleted", { reqId: req.id, actor: req.user?.id, target: id });
+    return res.status(200).json({ status: "Staff deleted" });
+  } catch (err) {
+    req.log?.error("admin.delete.error", { reqId: req.id, msg: err.message });
+    return res.status(500).json({ status: "Error deleting admin" });
+  }
 };
 
-// Get all admins
-exports.getAllAdmins = (req, res) => {
-  Admin.find()
-    .then((admins) => {
-      res.json(admins);
-    })
-    .catch((err) => {
-      console.log(err);
-    });
-};
+/**
+ * Login admin (returns JWT)
+ * Security logging: success/fail/error with minimal, non-sensitive context (A09)
+ */
+exports.loginAdmin = async (req, res) => {
+  const { email, password } = req.body || {};
+  const start = Date.now();
 
-// Get admin by ID
-exports.getAdminById = async (req, res) => {
-  let aid = req.params.id;
+  const ip = req.ip || req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  const ua = req.headers["user-agent"];
+  const emailHash = hashEmail(email);
 
-  const usr = await Admin.findById(aid)
-    .then((staff) => {
-      res.status(200).send({ status: "Staff fetched", staff });
-    })
-    .catch((err) => {
-      console.log(err.message);
-      res.status(500).send({
-        status: "Error in getting staff details",
-        error: err.message,
+  try {
+    const admin = await Admin.findOne({ email }).select("+password");
+    if (!admin) {
+      req.log?.warn("auth.login.failed", {
+        role: "admin",
+        reason: "no-user",
+        emailHash,
+        ip,
+        ua,
+        reqId: req.id,
+        ms: Date.now() - start,
       });
+      return res.status(401).json({ rst: "invalid admin" });
+    }
+
+    const ok = await admin.comparePassword(password);
+    if (!ok) {
+      req.log?.warn("auth.login.failed", {
+        role: "admin",
+        reason: "bad-credentials",
+        emailHash,
+        ip,
+        ua,
+        reqId: req.id,
+        ms: Date.now() - start,
+      });
+      return res.status(401).json({ rst: "incorrect password" });
+    }
+
+    const token = signToken({
+      sub: admin._id.toString(),
+      role: admin.roleName,
+      email: admin.email,
     });
+
+    req.log?.info("auth.login.success", {
+      role: "admin",
+      userId: admin._id.toString(),
+      ip,
+      ua,
+      reqId: req.id,
+      ms: Date.now() - start,
+    });
+
+    return res.status(200).json({ rst: "success", data: admin.toJSON(), tok: token });
+  } catch (error) {
+    req.log?.error("auth.login.error", {
+      role: "admin",
+      emailHash,
+      ip,
+      ua,
+      reqId: req.id,
+      ms: Date.now() - start,
+      msg: error.message,
+    });
+    return res.status(500).json({ error: "Server error" });
+  }
 };
 
-// Search admins
+/**
+ * Check token (compat: reads Authorization if auth middleware not used)
+ */
+exports.checkToken = async (req, res) => {
+  try {
+    const header = req.headers.authorization || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+    if (!token) return res.status(401).json({ rst: "no token" });
+
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"], issuer: JWT_ISSUER });
+    const admin = await Admin.findById(decoded.sub);
+    return res.status(200).json({ rst: "checked", admin });
+  } catch (e) {
+    return res.status(401).json({ rst: "invalid token" });
+  }
+};
+
+/**
+ * Get all admins
+ */
+exports.getAllAdmins = async (_req, res) => {
+  try {
+    const admins = await Admin.find().lean();
+    return res.json(admins);
+  } catch (err) {
+    return res.status(500).json({ error: "Server error" });
+  }
+};
+
+/**
+ * Get admin by ID
+ */
+exports.getAdminById = async (req, res) => {
+  try {
+    const admin = await Admin.findById(req.params.id).lean();
+    if (!admin) return res.status(404).json({ error: "Not found" });
+    return res.status(200).json({ status: "Staff fetched", staff: admin });
+  } catch (err) {
+    return res.status(500).json({ status: "Error in getting staff details", error: err.message });
+  }
+};
+
+/**
+ * Search admins (safe regex)
+ */
 exports.searchAdmins = async (req, res) => {
   try {
-    const query = req.query.query;
+    const q = (req.query.query || "").trim();
+    if (!q) return res.json([]);
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     const results = await Admin.find({
-      $or: [
-        { email: { $regex: query, $options: "i" } },
-        { name: { $regex: query, $options: "i" } },
-        { roleName: { $regex: query, $options: "i" } },
-        { allocatedWork: { $regex: query, $options: "i" } },
-      ],
-    });
-    res.json(results);
+      $or: [{ email: re }, { name: re }, { roleName: re }, { allocatedWork: re }],
+    }).lean();
+    return res.json(results);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Server error" });
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
-// Update admin
+/**
+ * Update admin (no password)
+ */
 exports.updateAdmin = async (req, res) => {
-  let sid = req.params.id;
-  const { name, email, phone, roleName, allocatedWork } = req.body;
-
-  const updateStaff = { name, email, phone, roleName, allocatedWork };
-
-  await Admin.findByIdAndUpdate(sid, updateStaff)
-    .then(() => {
-      const mailOptions = {
-        from: "hospitalitp@zohomail.com",
-        to: email,
-        subject: "Staff Profile Updated",
-        text: `Hello ${name}, \nYour Staff Account has been Updated.\nEmail : ${email} \nNew Role : ${roleName}\nAllocated Work : ${allocatedWork}\nPhone : ${phone}\nThank You.`,
-      };
-
-      transporter.sendMail(mailOptions, (error, info) => {
-        if (error) {
-          console.log(error);
-        } else {
-          console.log("Email sent: " + info.response);
-        }
-      });
-
-      res.status(200).send({ status: "Staff updated" });
-    })
-    .catch((err) => {
-      console.log(err);
-      res.status(500).send({
-        status: "Error with updating information",
-        error: err.message,
-      });
-    });
+  try {
+    const { name, email, phone, roleName, allocatedWork } = req.body;
+    const update = { name, email, phone, roleName, allocatedWork };
+    await Admin.findByIdAndUpdate(req.params.id, update, { runValidators: true });
+    req.log?.info("admin.updated", { reqId: req.id, actor: req.user?.id, target: req.params.id });
+    return res.status(200).json({ status: "Staff updated" });
+  } catch (err) {
+    return res.status(500).json({ status: "Error with updating information", error: err.message });
+  }
 };
 
-// Update admin with password
+/**
+ * Update admin WITH password (hashed via model hook)
+ */
 exports.updateAdminWithPassword = async (req, res) => {
-  let sid = req.params.id;
-  const { name, email, phone, roleName, allocatedWork, password } = req.body;
+  try {
+    const { name, email, phone, roleName, allocatedWork, password } = req.body;
+    const update = { name, email, phone, roleName, allocatedWork };
+    if (password) update.password = password; // model hook will hash
 
-  const updateStaff = { name, email, phone, roleName, allocatedWork, password };
-
-  await Admin.findByIdAndUpdate(sid, updateStaff)
-    .then(() => {
-      res.status(200).send({ status: "Staff updated" });
-    })
-    .catch((err) => {
-      console.log(err);
-      res.status(500).send({
-        status: "Error with updating information",
-        error: err.message,
-      });
-    });
+    await Admin.findByIdAndUpdate(req.params.id, update, { runValidators: true });
+    req.log?.info("admin.updated.withPassword", { reqId: req.id, actor: req.user?.id, target: req.params.id });
+    return res.status(200).json({ status: "Staff updated" });
+  } catch (err) {
+    return res.status(500).json({ status: "Error with updating information", error: err.message });
+  }
 };

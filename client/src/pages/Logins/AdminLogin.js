@@ -20,7 +20,8 @@ const AdminLogin = () => {
     const admin = { email, password };
 
     axios
-      .post("http://localhost:8070/admin/login", admin)
+      .post("http://192.168.8.100:8070/admin/login", admin)
+      // .post("http://localhost:8070/admin/login", admin)
       .then((res) => {
         if (res.data.rst === "success") {
           localStorage.setItem("type", "admin");
