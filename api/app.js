@@ -1,77 +1,99 @@
+// api/app.js (merged)
+const path = require("path");
 const express = require("express");
-// Initialize express
-const app = express();
 const dotenv = require("dotenv");
-dotenv.config(); // load env first
+dotenv.config(); // load env before everything else
 
+const app = express();
 
-
+// Security & middleware
 const cors = require("cors");
+const helmet = require("helmet");
 const mongoSanitize = require("express-mongo-sanitize");
+
+// DB connection
 const { connectToDatabase } = require("./Configurations/DB_Connection.js");
 
+// Mongoose tuning
 const mongoose = require("mongoose");
 mongoose.set("sanitizeFilter", true);
-const { isValidObjectId } = mongoose; 
+mongoose.set("debug", true); // show Mongo queries in console
+const { isValidObjectId } = mongoose; // (kept for compatibility even if unused)
 
+// If running behind a proxy (e.g., Heroku/NGINX), keep this:
+app.set("trust proxy", 1);
 
-mongoose.set("debug", true); // shows Mongo queries in console
+// ---- CORS: support BOTH styles (open vs allowlist) ----
+// - If CORS_MODE=open -> fully open (matches v1 behavior)
+// - Else use allowlist (matches v2 behavior)
+const CORS_MODE = (process.env.CORS_MODE || "allowlist").toLowerCase();
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
 
+if (CORS_MODE === "open") {
+  app.use(cors()); // v1 behavior
+} else {
+  const corsOptions = {
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true); // same-origin / curl
+      return cb(null, ALLOWED_ORIGINS.includes(origin));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false, // set true only if using cookie auth
+    maxAge: 600,
+  };
+  app.use(cors(corsOptions)); // v2 behavior
+}
 
-// Middleware (order matters, and must be AFTER app is created)
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({extended: true }));
-app.use(mongoSanitize({ allowDots: false, replaceWith: "_" })); // moved here
-app.use("/uploads", express.static("uploads")); // Prescription upload in insurance claim
+app.disable("x-powered-by");
+app.use(helmet({ contentSecurityPolicy: false })); // keep CSP off unless configured
 
-// Database connection
+// Body parsers
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
+
+// NoSQL injection guard (from v1)
+app.use(mongoSanitize({ allowDots: false, replaceWith: "_" }));
+
+// Static files (uploads)
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+// ------------------------ DB connection ------------------------
 connectToDatabase()
   .then(() => console.log("Database connection successful"))
   .catch((err) => console.error("Database connection error:", err));
 
-// Routes
-const patientRouter = require("./routes/route.patient.js");
-app.use("/patient", patientRouter);
+// ------------------------------ Routes ------------------------------
+app.use("/patient", require("./routes/route.patient.js"));
+app.use("/admin", require("./routes/routes.admin.js"));
+app.use("/doctor", require("./routes/route.doctors.js"));
+app.use("/channel", require("./routes/route.channels.js"));
+app.use("/appointment", require("./routes/route.appointment.js"));
+app.use("/prescription", require("./routes/route.prescription.js"));
+app.use("/report", require("./routes/reports"));
+app.use("/test", require("./routes/route.tests.js"));
+app.use("/record", require("./routes/records"));
+app.use("/Inventory", require("./routes/route.inventory.js")); // kept exact casing to avoid breaking clients
+app.use("/Order", require("./routes/order.js"));               // kept exact casing to avoid breaking clients
+app.use("/PharmacyIn", require("./routes/pharmacyin"));        // kept exact casing to avoid breaking clients
+app.use("/card", require("./routes/CardRoutes.js"));
+app.use("/insurance", require("./routes/insuranceRoutes"));
 
-const adminRoutes = require("./routes/routes.admin.js");
-app.use("/admin", adminRoutes);
+// ------------------------- Fallback handlers -------------------------
+app.use((req, res) => res.status(404).json({ error: "Not found" }));
 
-const doctorRoutes = require("./routes/route.doctors.js");
-app.use("/doctor", doctorRoutes);
+// Centralized error handler (safe message in production)
+app.use((err, req, res, next) => {
+  console.error(err);
+  const status = err.status || 500;
+  const msg =
+    status === 500 && process.env.NODE_ENV === "production"
+      ? "Internal Server Error"
+      : err.message || "Error";
+  res.status(status).json({ error: msg });
+});
 
-const channelRouter = require("./routes/route.channels.js");
-app.use("/channel", channelRouter);
-
-const appointmentRouter = require("./routes/route.appointment.js");
-app.use("/appointment", appointmentRouter);
-
-const prescriptionRouter = require("./routes/route.prescription.js");
-app.use("/prescription", prescriptionRouter);
-
-const reportRouter = require("./routes/reports");
-app.use("/report", reportRouter);
-
-const testRoutes = require("./routes/route.tests.js");
-app.use("/test", testRoutes);
-
-const recordRouter = require("./routes/records"); // optional: rename from recordtRouter
-app.use("/record", recordRouter);
-
-const inventoryRoutes = require("./routes/route.inventory.js");
-app.use("/Inventory", inventoryRoutes); // consider "/inventory"
-
-const orderRoutes = require("./routes/order.js");
-app.use("/Order", orderRoutes); // consider "/order"
-
-const pharmacyRoutes = require("./routes/pharmacyin"); // optional: rename from pharmcyRoutes
-app.use("/PharmacyIn", pharmacyRoutes); // consider "/pharmacy-in"
-
-const cardRoutes = require("./routes/CardRoutes.js");
-app.use("/card", cardRoutes);
-
-const insuranceRoutes = require("./routes/insuranceRoutes");
-app.use("/insurance", insuranceRoutes);
-
-// Export the app
 module.exports = app;

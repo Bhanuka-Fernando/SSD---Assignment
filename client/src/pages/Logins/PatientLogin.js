@@ -1,40 +1,64 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import api from "../../api"; // shared axios instance (baseURL, interceptors, etc.)
 
 const PatientLogin = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const navigate = useNavigate();
+
+  // prefer shared client; fallback to vanilla axios
+  const client = api && api.post ? api : axios;
 
   useEffect(() => {
     const token = localStorage.getItem("token");
     const type = localStorage.getItem("type");
 
-    if (token != null && type === "patient") {
-      window.location.href = "/patientHome";
+    if (token && type === "patient") {
+      // prime Authorization header for subsequent API calls
+      if (api && api.defaults) {
+        api.defaults.headers.common.Authorization = `Bearer ${token}`;
+      } else {
+        axios.defaults.headers.common.Authorization = `Bearer ${token}`;
+      }
+      navigate("/patientHome", { replace: true });
     }
-  }, []);
+  }, [navigate]);
 
-  function login(e) {
+  async function login(e) {
     e.preventDefault();
 
-    const patient = { email, password };
+    try {
+      // If using the shared client, rely on its baseURL (/patient/login).
+      // Otherwise hit the explicit localhost endpoint (v1 behavior).
+      const url =
+        client === api ? "/patient/login" : "http://localhost:8070/patient/login";
 
-    axios.post("http://localhost:8070/patient/login", patient)
-      .then((res) => {
-        if (res.data.rst === "success") {
-          localStorage.setItem("type", "patient");
-          localStorage.setItem("token", res.data.tok);
-          alert("Login successful");
-          window.location = '/patientHome';
-        } else if (res.data.rst === "incorrect password") {
-          alert("Incorrect password");
-        } else if (res.data.rst === "invalid user") {
-          alert("Invalid user");
+      const { data } = await client.post(url, { email, password });
+
+      if (data.rst === "success") {
+        localStorage.setItem("type", "patient");
+        localStorage.setItem("token", data.tok);
+
+        // prime Authorization header immediately
+        if (api && api.defaults) {
+          api.defaults.headers.common.Authorization = `Bearer ${data.tok}`;
         }
-      })
-      .catch((err) => {
-        alert("An error occurred during login");
-      });
+        axios.defaults.headers.common.Authorization = `Bearer ${data.tok}`;
+
+        alert("Login successful");
+        navigate("/patientHome", { replace: true });
+      } else if (data.rst === "incorrect password") {
+        alert("Incorrect password");
+      } else if (data.rst === "invalid user") {
+        alert("Invalid user");
+      } else {
+        alert("Login failed");
+      }
+    } catch (err) {
+      alert("An error occurred during login");
+    }
   }
 
   return (
@@ -79,6 +103,6 @@ const PatientLogin = () => {
       </div>
     </div>
   );
-}
+};
 
 export default PatientLogin;
