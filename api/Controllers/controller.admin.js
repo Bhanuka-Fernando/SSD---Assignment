@@ -17,39 +17,32 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Add new admin
-exports.addAdmin = (req, res) => {
-  const { email, name, phone, roleName, allocatedWork, password } = req.body;
 
-  const newAdmin = new Admin({
-    email,
-    name,
-    password,
-    phone,
-    roleName,
-    allocatedWork,
-  });
+// controller.admin.js
+exports.addAdmin = async (req, res) => {
+  try {
+    const { email, name, phone, roleName, allocatedWork, password } = req.body;
 
-  newAdmin.save().then(() => {
-    const mailOptions = {
-      from: "helasuwa@zohomail.com",
-      to: email,
-      subject: "Staff Profile Created",
-      text: `Hello \nYour Staff Account has been created.\n\nEmail : ${email} \nPassword : ${password}\n\nThank You.`,
-    };
+    const salt = await bcrypt.genSalt(10);
+    const hashed = await bcrypt.hash(password, salt);
 
-    transporter.sendMail(mailOptions, (error, info) => {
-      if (error) {
-        console.log(error);
-      } else {
-        console.log("Email sent: " + info.response);
-      }
+    const newAdmin = new Admin({
+      email,
+      name,
+      password: hashed,        // store bcrypt hash
+      phone,
+      roleName,
+      allocatedWork,
     });
+
+    await newAdmin.save();
     res.json("Admin Added");
-  }).catch(err => {
-    console.log(err);
-  });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
 };
+
 
 // Delete admin
 exports.deleteAdmin = async (req, res) => {
