@@ -1,30 +1,72 @@
+// app.js
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
-const { connectToDatabase } = require("./Configurations/DB_Connection.js"); // Import the Singleton connection function
+const helmet = require("helmet");
+const session = require("express-session");
+
+const { connectToDatabase } = require("./Configurations/DB_Connection.js"); // Singleton DB
+
+// OIDC + RBAC helpers
+const authRoutes = require("./auth");           // /auth/login, /auth/callback, /auth/me, /auth/logout
+const requireAuth = require("./requireAuth");   // 401 if not logged in
+const requireRole = require("./requireRole");   // 403 if role not allowed
 
 dotenv.config();
 
 // Initialize express
 const app = express();
 
-// Middleware
-app.use(cors());
+// --- Security & Core Middleware ---
+app.use(helmet());
+
+// Allow your React app (http://localhost:3000) to send cookies (credentials:true)
+app.use(
+  cors({
+    origin: "http://localhost:3000",
+    credentials: true,
+  })
+);
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
-app.use('/uploads', express.static('uploads')); // Prescription upload in insurance claim
 
-// Database connection
-connectToDatabase() // Use the Singleton function to connect to the database
+// Serve static uploads (Prescription upload in insurance claim)
+app.use("/uploads", express.static("uploads"));
+
+// Trust proxy if you later run behind Nginx/Heroku (keeps SameSite/secure cookies working)
+// app.set('trust proxy', 1);
+
+// Session cookie (used by OIDC and protected routes)
+app.use(
+  session({
+    name: "sid",
+    secret: process.env.SESSION_SECRET || "change-me",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: false, // set to true in production with HTTPS
+      sameSite: "lax",
+    },
+  })
+);
+
+// --- Auth endpoints (OIDC) ---
+app.use("/auth", authRoutes);
+
+// --- Database connection ---
+connectToDatabase()
   .then(() => console.log("Database connection successful"))
   .catch((err) => console.error("Database connection error:", err));
 
-// Routes
+// --- Your existing routes (patient/doctor/etc.) ---
 const patientRouter = require("./routes/route.patient.js");
 app.use("/patient", patientRouter);
 
+// ✅ Guard /admin with session + role=admin
 const adminRoutes = require("./routes/routes.admin.js");
-app.use("/admin", adminRoutes);
+app.use("/admin", requireAuth, requireRole("admin"), adminRoutes);
 
 const doctorRoutes = require("./routes/route.doctors.js");
 app.use("/doctor", doctorRoutes);
@@ -62,5 +104,9 @@ app.use("/card", cardRoutes);
 const insuranceRoutes = require('./routes/insuranceRoutes');
 app.use("/insurance", insuranceRoutes);
 
-// Export the app
+// --- Optional: simple health check ---
+app.get("/health", (req, res) => {
+  res.json({ ok: true, user: req.session?.user || null });
+});
+
 module.exports = app;

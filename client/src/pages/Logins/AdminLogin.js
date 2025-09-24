@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 
+const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:8070";
+
 const AdminLogin = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -8,7 +10,6 @@ const AdminLogin = () => {
   useEffect(() => {
     const token = localStorage.getItem("token");
     const type = localStorage.getItem("type");
-
     if (token != null && type === "admin") {
       window.location.href = "/laboratory";
     }
@@ -16,11 +17,10 @@ const AdminLogin = () => {
 
   function login(e) {
     e.preventDefault();
-
     const admin = { email, password };
 
     axios
-      .post("http://localhost:8070/admin/login", admin)
+      .post(`${API_BASE}/admin/login`, admin)
       .then((res) => {
         if (res.data.rst === "success") {
           localStorage.setItem("type", "admin");
@@ -33,16 +33,40 @@ const AdminLogin = () => {
           alert("Invalid user");
         }
       })
-      .catch((err) => {
+      .catch(() => {
         alert("An error occurred during login");
       });
   }
+
+
+  const googleLogin = () => {
+    window.location.href = `${API_BASE}/auth/login?role=admin`;
+  };
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-blue-200 to-blue-300 p-4">
       <div className="bg-white shadow-lg rounded-2xl p-10 max-w-sm w-full flex flex-col items-center">
         <img className="w-24 mb-6" src="/images/Hospital-logo-W.png" alt="Hospital Logo" />
         <h1 className="text-2xl font-bold text-gray-800 mb-6">Admin Login</h1>
+
+        {/* Google / OpenID button */}
+        <button
+          type="button"
+          onClick={googleLogin}
+          className="w-full mb-6 flex items-center justify-center gap-2 border border-gray-300 rounded-full py-3 font-semibold text-gray-700 hover:bg-gray-50 transition-all duration-200"
+        >
+          <img src="https://www.google.com/favicon.ico" alt="G" className="h-4 w-4" />
+          Continue with Google
+        </button>
+
+        {/* Little divider */}
+        <div className="flex items-center w-full mb-6">
+          <div className="flex-1 h-px bg-gray-200" />
+          <span className="px-3 text-gray-400 text-sm">or</span>
+          <div className="flex-1 h-px bg-gray-200" />
+        </div>
+
+        {/* Legacy email/password form (kept) */}
         <form className="w-full" onSubmit={login}>
           <div className="mb-6">
             <input
